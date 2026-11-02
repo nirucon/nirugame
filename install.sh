@@ -44,9 +44,9 @@ install_assets() {
     install -m 644 "$src_assets/nirugame.svg" "$ICONDIR/nirugame.svg"
   else
     tmp_assets=$(mktemp -d)
-    fetch "$NIRUGAME_BASE_URL/assets/nirugame.desktop" "$tmp_assets/nirugame.desktop" ||
+    fetch "$NIRUGAME_BASE_URL/nirugame.desktop" "$tmp_assets/nirugame.desktop" ||
       die "cannot download the desktop entry"
-    fetch "$NIRUGAME_BASE_URL/assets/nirugame.svg" "$tmp_assets/nirugame.svg" ||
+    fetch "$NIRUGAME_BASE_URL/nirugame.svg" "$tmp_assets/nirugame.svg" ||
       die "cannot download the icon"
     install -m 644 "$tmp_assets/nirugame.desktop" "$APPDIR/nirugame.desktop"
     install -m 644 "$tmp_assets/nirugame.svg" "$ICONDIR/nirugame.svg"
