@@ -4,7 +4,6 @@ use nirugame::{
     games::{self, Catalog, Game},
     music::{self, Player, Track},
 };
-use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -441,9 +440,6 @@ impl eframe::App for NirugameApp {
                     self.footer(ui, &pal);
                 });
             });
-        if self.player.is_playing() {
-            ctx.request_repaint_after(Duration::from_secs(1));
-        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

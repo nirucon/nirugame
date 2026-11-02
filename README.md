@@ -25,7 +25,7 @@ From a release checkout or source archive:
 Install a specific release or prefix:
 
 ```sh
-NIRUGAME_VERSION=0.1.2 ./install.sh
+NIRUGAME_VERSION=0.1.3 ./install.sh
 NIRUGAME_PREFIX=/usr/local ./install.sh   # run with appropriate privileges
 ```
 
@@ -78,6 +78,12 @@ Game launch data is kept as an argument vector and run without a shell. NIRUGAME
 does not scan arbitrary Windows executables or Wine prefixes. It starts games
 through Steam (`steam -applaunch APPID`), RetroArch (`retroarch -L CORE
 CONTENT`) or `gio launch` for native desktop entries.
+
+Every external program is placed in its own session. This matters under NIRUWM,
+where session programs share a process group: a helper that tries to read or
+change the controlling terminal can receive SIGTTIN/SIGTTOU, which would stop
+the whole group including the window manager. The SID player is also started
+quietly with the lower-cost reSID engine and is terminated with NIRUGAME.
 
 ## Build and test (development only)
 

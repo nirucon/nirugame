@@ -69,11 +69,14 @@ pub fn launch(game: &Game) -> Result<(), String> {
     let Some(program) = game.launch.first() else {
         return Err(format!("{} has no launch command", game.name));
     };
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(&game.launch[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    crate::process::detach_terminal(&mut command);
+    let mut child = command
         .spawn()
         .map_err(|error| format!("cannot start {}: {error}", game.name))?;
     // The launcher may stay open. Reap the child without blocking the UI.

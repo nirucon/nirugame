@@ -6,7 +6,6 @@
 
 use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
-use std::os::unix::process::CommandExt;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -141,21 +140,14 @@ impl Player {
         }
         let mut command = Command::new("sidplayfp");
         command
+            .arg("-q1")
+            .arg("--resid")
             .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        #[cfg(target_os = "linux")]
-        unsafe {
-            command.pre_exec(|| {
-                // Do not leave a SID player behind on logout or a forced app exit.
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                if libc::getppid() == 1 {
-                    libc::_exit(1);
-                }
-                Ok(())
-            });
-        }
+        crate::process::detach_terminal(&mut command);
+        crate::process::die_with_parent(&mut command);
         let child = command.spawn().map_err(|error| {
             self.selected.clear();
             if error.kind() == std::io::ErrorKind::NotFound {
