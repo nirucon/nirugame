@@ -1,0 +1,45 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Verify version
+        run: test "$(./target/release/nirugame --version | awk '{print $2}')" = "${GITHUB_REF_NAME#v}"
+      - name: Package prebuilt binary
+        run: |
+          mkdir -p dist
+          cp target/release/nirugame install.sh uninstall.sh README.md LICENSE dist/
+          cp -R assets dist/
+          printf '%s\n' "${GITHUB_REF_NAME#v}" > dist/VERSION
+          (cd dist && sha256sum nirugame install.sh uninstall.sh README.md LICENSE VERSION assets/* > SHA256SUMS)
+          (cd dist && tar -czf "nirugame-${GITHUB_REF_NAME#v}-x86_64-linux-gnu.tar.gz" nirugame VERSION install.sh uninstall.sh README.md LICENSE assets SHA256SUMS)
+          cd dist && sha256sum nirugame *.tar.gz install.sh uninstall.sh README.md LICENSE VERSION assets/* > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          make_latest: true
+          files: |
+            dist/nirugame
+            dist/nirugame-*-x86_64-linux-gnu.tar.gz
+            dist/install.sh
+            dist/uninstall.sh
+            dist/README.md
+            dist/LICENSE
+            dist/VERSION
+            dist/assets/*
+            dist/SHA256SUMS
+          generate_release_notes: true

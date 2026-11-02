@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=NIRUGAME
+Comment=Steam, RetroArch, native games and optional SID music
+Exec=nirugame
+Icon=nirugame
+Terminal=false
+Categories=Game;ActionGame;
+Keywords=games;steam;retroarch;emulator;sid;
+StartupNotify=false
