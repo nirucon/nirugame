@@ -3,11 +3,11 @@
 # compiles on the target machine.
 #
 #   ./install.sh                 install the latest release for this user
-#   NIRUGAME_VERSION=0.1.0 ./install.sh
+#   NIRUGAME_VERSION=0.1.2 ./install.sh
 #   ./install.sh --uninstall     remove program files, keep music and config
 set -eu
 
-VERSION="0.1.1"
+VERSION="0.1.2"
 REPO="${NIRUGAME_REPO:-nirucon/nirugame}"
 PREFIX="${NIRUGAME_PREFIX:-$HOME/.local}"
 BINDIR="$PREFIX/bin"

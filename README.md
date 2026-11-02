@@ -25,7 +25,7 @@ From a release checkout or source archive:
 Install a specific release or prefix:
 
 ```sh
-NIRUGAME_VERSION=0.1.0 ./install.sh
+NIRUGAME_VERSION=0.1.2 ./install.sh
 NIRUGAME_PREFIX=/usr/local ./install.sh   # run with appropriate privileges
 ```
 

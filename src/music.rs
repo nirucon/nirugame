@@ -5,6 +5,8 @@
 //! killed and reaped on stop, selection change and application exit.
 
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -137,20 +139,31 @@ impl Player {
         if path.as_os_str().is_empty() {
             return Ok(());
         }
-        let child = Command::new("sidplayfp")
+        let mut command = Command::new("sidplayfp");
+        command
             .arg(path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|error| {
-                self.selected.clear();
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    "sidplayfp is not installed; install it from your distribution".into()
-                } else {
-                    format!("cannot start sidplayfp: {error}")
+            .stderr(Stdio::null());
+        #[cfg(target_os = "linux")]
+        unsafe {
+            command.pre_exec(|| {
+                // Do not leave a SID player behind on logout or a forced app exit.
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                if libc::getppid() == 1 {
+                    libc::_exit(1);
                 }
-            })?;
+                Ok(())
+            });
+        }
+        let child = command.spawn().map_err(|error| {
+            self.selected.clear();
+            if error.kind() == std::io::ErrorKind::NotFound {
+                "sidplayfp is not installed; install it from your distribution".into()
+            } else {
+                format!("cannot start sidplayfp: {error}")
+            }
+        })?;
         self.child = Some(child);
         Ok(())
     }

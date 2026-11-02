@@ -6,12 +6,6 @@ use nirugame::{
 };
 use std::time::Duration;
 
-const LOGO: &str = "\
- _  _ ___ ___ _   _ ___   ___   __  __ ___
-| \\| |_ _| _ \\ | | / __| / __| /  \\|  \\/  | __|
-| .` || ||   / |_| \\__ \\| (_ | | () | |\\/| | _|
-|_|\\_|___|_|_\\\\___/|___/ \\___| \\__/|_|  |_|___|";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
     All,
@@ -106,6 +100,24 @@ impl NirugameApp {
         self.selected = 0;
     }
 
+    fn refresh_music(&mut self) {
+        self.tracks = music::discover();
+        if !self.music_config.music.is_empty()
+            && !std::path::Path::new(&self.music_config.music).is_file()
+        {
+            self.player.stop();
+            self.music_config.music.clear();
+            if let Err(error) = music::save_config(&self.music_config) {
+                self.message = Some((error, true));
+                return;
+            }
+        }
+        self.message = Some((
+            format!("Rescanned SID music folder ({} tracks)", self.tracks.len()),
+            false,
+        ));
+    }
+
     fn launch_selected(&mut self, game: &Game) {
         match games::launch(game) {
             Ok(()) => self.message = Some((format!("Launching {}", game.name), false)),
@@ -151,6 +163,9 @@ impl NirugameApp {
                     self.view = view;
                     self.selected = 0;
                     self.message = None;
+                    if view == View::Music {
+                        self.refresh_music();
+                    }
                 }
             }
         });
@@ -165,6 +180,16 @@ impl NirugameApp {
             .color(pal.muted)
             .size(11.0),
         );
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Refresh tracks").clicked() {
+                self.refresh_music();
+            }
+            ui.label(
+                RichText::new(format!("{} files found", self.tracks.len()))
+                    .color(pal.muted)
+                    .size(11.0),
+            );
+        });
         ui.add_space(6.0);
         let off = self.music_config.music.is_empty();
         if ui
@@ -331,7 +356,7 @@ impl NirugameApp {
     fn footer(&self, ui: &mut Ui, pal: &Palette) {
         ui.horizontal_wrapped(|ui| {
             ui.label(
-                RichText::new("↑↓ select · Enter launch · Tab switch · Esc close")
+                RichText::new("Up/Down select · Enter launch · Tab switch · Esc close")
                     .color(pal.disabled)
                     .size(10.0),
             );
@@ -362,7 +387,21 @@ impl eframe::App for NirugameApp {
         egui::CentralPanel::default()
             .frame(Frame::none().fill(pal.background).inner_margin(18.0))
             .show(ctx, |ui| {
-                ui.label(RichText::new(LOGO).monospace().color(pal.accent).size(13.0));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new("N I R U G A M E")
+                            .monospace()
+                            .strong()
+                            .color(pal.accent)
+                            .size(27.0),
+                    );
+                    ui.label(
+                        RichText::new("// retro game launcher")
+                            .monospace()
+                            .color(pal.muted)
+                            .size(11.0),
+                    );
+                });
                 ui.label(
                     RichText::new(format!(
                         "NIRUGAME · {} games · theme {}",
