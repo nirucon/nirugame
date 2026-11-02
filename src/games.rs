@@ -379,6 +379,15 @@ fn desktop_value(text: &str, key: &str) -> Option<String> {
 
 fn desktop_game(path: &Path) -> Option<Game> {
     let text = fs::read_to_string(path).ok()?;
+    // The launcher's own desktop entry is a Game entry too. Never list
+    // NIRUGAME as a game, and tolerate a user copy with the same Exec.
+    if path.file_name().and_then(|name| name.to_str()) == Some("nirugame.desktop") {
+        return None;
+    }
+    let exec = desktop_value(&text, "Exec").unwrap_or_default();
+    if exec.split_whitespace().next() == Some("nirugame") {
+        return None;
+    }
     if desktop_value(&text, "Type").as_deref() != Some("Application")
         || desktop_value(&text, "NoDisplay").as_deref() == Some("true")
     {
@@ -524,6 +533,20 @@ mod tests {
         let game = steam_manifest(&path).unwrap();
         assert_eq!(game.name, "Counter-Strike 2");
         assert_eq!(game.key, "steam:730");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn desktop_launcher_is_not_a_game() {
+        let dir = std::env::temp_dir().join(format!("nirugame-self-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("nirugame.desktop");
+        fs::write(
+            &path,
+            "[Desktop Entry]\nType=Application\nName=NIRUGAME\nCategories=Game;\nExec=nirugame\n",
+        )
+        .unwrap();
+        assert!(desktop_game(&path).is_none());
         let _ = fs::remove_dir_all(dir);
     }
 
