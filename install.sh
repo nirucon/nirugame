@@ -7,7 +7,7 @@
 #   ./install.sh --uninstall     remove program files, keep music and config
 set -eu
 
-VERSION="0.1.0"
+VERSION="0.1.1"
 REPO="${NIRUGAME_REPO:-nirucon/nirugame}"
 PREFIX="${NIRUGAME_PREFIX:-$HOME/.local}"
 BINDIR="$PREFIX/bin"

@@ -129,12 +129,15 @@ fn quoted(text: &str) -> Vec<String> {
 }
 
 fn pair_map(text: &str) -> std::collections::HashMap<String, String> {
-    let values = quoted(text);
+    // VDF keys and values share a line. Token-pairing the whole file breaks as
+    // soon as a nested table starts (AppState, InstalledDepots, ...), so only
+    // take lines that contain exactly one key/value pair.
     let mut pairs = std::collections::HashMap::new();
-    let mut index = 0;
-    while index + 1 < values.len() {
-        pairs.insert(values[index].clone(), values[index + 1].clone());
-        index += 2;
+    for line in text.lines() {
+        let values = quoted(line);
+        if values.len() == 2 {
+            pairs.insert(values[0].clone(), values[1].clone());
+        }
     }
     pairs
 }
@@ -162,6 +165,8 @@ fn steam_prefix() -> Option<Vec<String>> {
 fn steam_roots() -> Vec<PathBuf> {
     let mut roots = vec![
         home().join(".steam/steam"),
+        home().join(".steam/root"),
+        home().join(".steam/debian-installation"),
         home().join(".local/share/Steam"),
         home().join(".var/app/com.valvesoftware.Steam/.local/share/Steam"),
     ];
@@ -240,7 +245,16 @@ fn discover_steam() -> Result<Vec<Game>, String> {
 }
 
 fn retroarch_prefix() -> Option<Vec<String>> {
-    command_in_path("retroarch").map(|path| vec![path])
+    if let Some(path) = command_in_path("retroarch") {
+        return Some(vec![path]);
+    }
+    command_exists("flatpak").then(|| {
+        vec![
+            "flatpak".into(),
+            "run".into(),
+            "org.libretro.RetroArch".into(),
+        ]
+    })
 }
 
 fn retroarch_playlists() -> Vec<PathBuf> {
@@ -248,14 +262,18 @@ fn retroarch_playlists() -> Vec<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join(".config"));
     let mut paths = Vec::new();
-    let dir = base.join("retroarch/playlists");
-    if let Ok(entries) = fs::read_dir(dir) {
-        paths.extend(
-            entries
-                .flatten()
-                .map(|entry| entry.path())
-                .filter(|path| path.extension().is_some_and(|ext| ext == "lpl")),
-        );
+    for dir in [
+        base.join("retroarch/playlists"),
+        home().join(".var/app/org.libretro.RetroArch/config/retroarch/playlists"),
+    ] {
+        if let Ok(entries) = fs::read_dir(dir) {
+            paths.extend(
+                entries
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .filter(|path| path.extension().is_some_and(|ext| ext == "lpl")),
+            );
+        }
     }
     paths.sort();
     paths
@@ -487,6 +505,22 @@ mod tests {
         assert_eq!(games.len(), 1);
         assert_eq!(games[0].name, "Alpha");
         assert!(games[0].detail.contains("MAME"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn steam_manifest_reads_nested_vdf_values() {
+        let dir = std::env::temp_dir().join(format!("nirugame-acf-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("appmanifest_730.acf");
+        fs::write(
+            &path,
+            "\"AppState\"\n{\n\t\"appid\"\t\t\"730\"\n\t\"name\"\t\t\"Counter-Strike 2\"\n\t\"installdir\"\t\t\"Counter-Strike Global Offensive\"\n\t\"InstalledDepots\"\n\t{\n\t\t\"731\"\t\t{ \"manifest\" \"1\" }\n\t}\n}\n",
+        )
+        .unwrap();
+        let game = steam_manifest(&path).unwrap();
+        assert_eq!(game.name, "Counter-Strike 2");
+        assert_eq!(game.key, "steam:730");
         let _ = fs::remove_dir_all(dir);
     }
 
