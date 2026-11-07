@@ -1,93 +1,130 @@
 # NIRUGAME
 
-NIRUGAME is an optional retro-themed game launcher for NIRUX. It finds games
-you already own and installed; it does not download, bundle or redistribute
-games, ROMs, artwork or SID music.
+Retro-themed launcher for the Steam, RetroArch and native games you already have installed.
 
-- Steam games from `libraryfolders.vdf` and `appmanifest_*.acf`
-- RetroArch entries from `playlists/*.lpl`
-- Native games from `.desktop` entries with `Categories=Game`
-- Optional SID background music from your own files, with multiple tracks and **Off**
-- Live NIRUX theme colours, scrolling lists and keyboard launch
+**Status: alpha** · Part of the [NIRUX](https://github.com/nirucon/nirux) suite · [MIT License](LICENSE)
 
-## Install
+## About
 
-NIRUGAME is shipped as a **prebuilt x86_64 Linux binary**. The installer
-downloads and checksum-verifies the release; it does not compile anything on
-the target machine.
+NIRUGAME is an optional NIRUX extra: one keyboard-friendly window that lists the
+games already on the computer and starts them. It reads local Steam manifests,
+RetroArch playlists and desktop entries; it does not download, bundle or
+redistribute games, ROMs, artwork or SID music. If you like, it plays your own
+SID tunes in the background while you pick a game.
 
-From a release checkout or source archive:
+## Features
 
-```sh
-./install.sh
-```
+- **Steam** games from `steamapps/libraryfolders.vdf` and `appmanifest_*.acf`
+  (native, Debian and Flatpak Steam locations).
+- **RetroArch** entries from `playlists/*.lpl` (native and Flatpak).
+- **Native** games from `.desktop` entries with `Categories=Game`, including
+  Flatpak exports.
+- Tabs **All**, **Steam**, **RetroArch**, **Native** and **Music**, with search.
+- Optional **SID background music** from your own `.sid`, `.psid` or `.rsid`
+  files, with several tracks and **Off**.
+- Live NIRUX theme colours, including custom user themes.
+- A reviewable package plan for Steam and RetroArch on Debian, Arch and Void,
+  printed only; NIRUGAME never installs anything itself.
+- Missing Steam, RetroArch or native libraries give an empty view, not an error.
 
-Install a specific release or prefix:
+## Requirements
 
-```sh
-NIRUGAME_VERSION=0.1.4 ./install.sh
-NIRUGAME_PREFIX=/usr/local ./install.sh   # run with appropriate privileges
-```
+- Linux x86_64 with X11 and OpenGL (prebuilt binary; Debian, Arch or Void).
+- Optional: Steam, RetroArch, `gio` (or `gtk-launch`) for native games, and
+  `sidplayfp` for SID music.
 
-Remove program files; music and configuration are kept:
+## Installation
 
-```sh
-./uninstall.sh
-```
-
-As a NIRUX extra, NIRUX places the binary in its managed prefix. Do not use
-this standalone installer over a NIRUX-managed symlink; run `nirux update`.
-
-## Use
+### With NIRUX
 
 ```sh
-nirugame
-nirugame --list
-nirugame --music-status
-nirugame --setup-plan steam
-nirugame --setup-plan retroarch
-nirugame --setup-plan all
+nirux extras install nirugame
+nirux extras update            # later, for the extras you selected
 ```
 
-The window lists discovered games. Use the tabs to narrow the list, type in
-the search field, use Up/Down and Enter to launch the selected game, or press
-the Launch button. Missing Steam, RetroArch or native libraries simply produce
-an empty view rather than an error.
+NIRUX downloads the pinned NIRUGAME release tag, verifies it and runs the
+project's own `install.sh`.
 
-`--setup-plan` only prints a reviewable package plan for Debian, Arch or Void.
-NIRUGAME never adds repositories, installs packages or changes GPU drivers.
+### Standalone
 
-## SID music
+The installer downloads the prebuilt x86_64 binary for its pinned release and
+checks it against the release `SHA256SUMS`; nothing is compiled on your machine.
 
-Put your own `.sid`, `.psid` or `.rsid` files in:
-
-```text
-${XDG_DATA_HOME:-~/.local/share}/nirugame/music
+```sh
+git clone https://github.com/nirucon/nirugame
+cd nirugame
+./install.sh                                  # into ~/.local
+NIRUGAME_VERSION=0.1.4 ./install.sh           # a specific release
+NIRUGAME_PREFIX=/usr/local ./install.sh       # another prefix (needs the rights to write there)
 ```
 
-Select **Off** or a track in the Music tab. Playback uses the external
-`sidplayfp` program; install it from your distribution if you want sound.
-NIRUGAME reaps the player process on stop, track change and exit. The selected
-track path is stored in `${XDG_CONFIG_HOME:-~/.config}/nirugame/config.toml`.
+## Usage
 
-No SID files are included in this repository or its releases.
+```sh
+nirugame                                    # open the window
+nirugame --open steam                       # start on a tab: all, steam, retroarch, native, music
+nirugame --list                             # discovered games as JSON
+nirugame --music-status                     # music folder, tracks and selection as JSON
+nirugame --setup-plan steam                 # print a package plan: steam, retroarch or all
+nirugame --version
+```
 
-## Safe launching
+| Key | Action |
+|---|---|
+| `Up` / `Down` | Select a game |
+| `Enter` | Launch the selected game |
+| `Tab` | Next tab (when the search field is not focused) |
+| `Esc` | Close |
 
-Game launch data is kept as an argument vector and run without a shell. NIRUGAME
-does not scan arbitrary Windows executables or Wine prefixes. It starts games
-through Steam (`steam -applaunch APPID`), RetroArch (`retroarch -L CORE
-CONTENT`) or `gio launch` for native desktop entries.
+Typing in the search field filters the list; the **Launch** button does the same
+as `Enter`.
 
-Every external program is placed in its own session. This matters under NIRUWM,
-where session programs share a process group: a helper that tries to read or
-change the controlling terminal can receive SIGTTIN/SIGTTOU, which would stop
-the whole group including the window manager. The SID player is also started
-quietly with the lower-cost reSID engine and is terminated with NIRUGAME.
+Games start without a shell: Steam with `steam -applaunch APPID` (or the
+Flatpak), RetroArch with `retroarch -L CORE CONTENT`, native games with
+`gio launch`. Every external program runs in its own session, so a helper that
+touches the terminal can never stop the NIRUWM process group. NIRUGAME does not
+scan Windows executables or Wine prefixes.
 
-## Build and test (development only)
+## Configuration
 
-Release users never need Rust. Maintainers can run:
+Put your own SID files in the music folder and choose **Off** or a track in the
+**Music** tab. Playback uses `sidplayfp` with the lighter reSID engine; the
+player is stopped on track change, **Off** and exit. No SID files are included in
+this repository or its releases.
+
+The selected track is the only setting and is saved automatically. Colours come
+from the active NIRUX theme in `~/.config/niruwm/`.
+
+## Files and paths
+
+| Path | Purpose |
+|---|---|
+| `${XDG_DATA_HOME:-~/.local/share}/nirugame/music/` | Your SID files |
+| `${XDG_CONFIG_HOME:-~/.config}/nirugame/config.toml` | Selected music track |
+| `~/.local/bin/nirugame` | Program (standalone and NIRUX extra) |
+| `~/.local/share/applications/nirugame.desktop` | Launcher entry |
+
+## Troubleshooting
+
+- **A tab is empty:** that library was not found. Check `nirugame --list`; it
+  also lists discovery errors.
+- **No music:** install `sidplayfp` from your distribution and check
+  `nirugame --music-status`.
+- **The binary does not start after install:** the X11/OpenGL runtime libraries
+  are missing; the installer stops with that message.
+
+## Uninstall
+
+```sh
+./uninstall.sh            # or: ./install.sh --uninstall
+```
+
+Program files, the desktop entry and the icon are removed; music and
+configuration are kept. Set `NIRUGAME_PREFIX` if you installed elsewhere.
+
+## Building from source
+
+Release users never need Rust. For development:
 
 ```sh
 cargo fmt --check
@@ -96,5 +133,38 @@ cargo test --locked
 cargo build --release --locked
 ```
 
-Licensed under MIT. NIRUGAME is not affiliated with Valve, Steam, RetroArch,
-SIDPLAY or any game publisher.
+## Status, disclaimer and how it's made
+
+**Status: alpha.** Discovery, launching and SID music work on my machines; the feature set is small and the look will still change.
+
+NIRUX and every niru* project are made by me, Nicklas Rudolfsson
+([@nirucon](https://github.com/nirucon)), for me. They are tailored to my own
+needs, preferences and workflows, on my own machines. If they fit yours too,
+that's a nice bonus.
+
+- **Free and open source.** Anyone is free to use, study, change and share
+  it under the [MIT License](LICENSE).
+- **No guarantees.** There is no warranty of any kind. Use it at your own
+  risk, read what you install and keep backups of anything that matters.
+- **How it's made.** Some of these projects I built from scratch by hand. In
+  more recent releases I have used Claude, Anthropic's AI, to do much of the
+  heavy lifting under my direction: I decide what to build and how it should
+  behave, and I test it on my own machines. It saves me a lot of time, and
+  the result is quite OK.
+- **Alpha, beta, dev, and maybe forever.** Most things here are alpha, beta
+  or dev, and may stay that way. Maybe one day there will be a real stable
+  release, but given how fast development moves, and how I am as a person,
+  maybe never :)
+
+| Label | Meaning |
+|---|---|
+| dev | Under active construction; may not build, install or work yet. |
+| alpha | Works on my machines, but incomplete or rough; expect breaking changes. |
+| beta | In daily use on my machines and mostly complete; rough edges remain. |
+
+## License
+
+MIT License, see [LICENSE](LICENSE). Copyright (c) 2026 Nirucon.
+
+NIRUGAME is not affiliated with Valve, Steam, RetroArch, SIDPLAY or any game
+publisher.
