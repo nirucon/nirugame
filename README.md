@@ -43,7 +43,8 @@ nirux extras update            # later, for the extras you selected
 ```
 
 NIRUX downloads the pinned NIRUGAME release tag, verifies it and runs the
-project's own `install.sh`.
+project's own `install.sh`. In NIRUX, `nirux manual nirugame` opens the short
+tour in the NIRUX manual.
 
 ### Standalone
 
@@ -114,6 +115,8 @@ from the active NIRUX theme in `~/.config/niruwm/`.
   are missing; the installer stops with that message.
 
 ## Uninstall
+
+With NIRUX: `nirux extras uninstall nirugame` runs the uninstaller below from the pinned release.
 
 ```sh
 ./uninstall.sh            # or: ./install.sh --uninstall
