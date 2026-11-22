@@ -3,11 +3,11 @@
 # compiles on the target machine.
 #
 #   ./install.sh                 install the latest release for this user
-#   NIRUGAME_VERSION=0.1.4 ./install.sh
+#   NIRUGAME_VERSION=0.2.0 ./install.sh
 #   ./install.sh --uninstall     remove program files, keep music and config
 set -eu
 
-VERSION="0.1.4"
+VERSION="0.2.0"
 REPO="${NIRUGAME_REPO:-nirucon/nirugame}"
 PREFIX="${NIRUGAME_PREFIX:-$HOME/.local}"
 BINDIR="$PREFIX/bin"
@@ -76,7 +76,7 @@ case "${1:-}" in
     [ "$expected" = "$(sha256 "$tmp/nirugame")" ] || die "checksum mismatch"
     chmod 755 "$tmp/nirugame"
     got=$("$tmp/nirugame" --version 2>/dev/null | awk '{print $2}') ||
-      die "binary cannot run; install missing X11/OpenGL runtime libraries"
+      die "the downloaded binary does not run on this system"
     [ "$got" = "$tag" ] || die "expected NIRUGAME $tag, got $got"
     install -d "$BINDIR"
     install -m 755 "$tmp/nirugame" "$BINDIR/nirugame"

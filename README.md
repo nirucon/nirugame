@@ -29,7 +29,8 @@ SID tunes in the background while you pick a game.
 
 ## Requirements
 
-- Linux x86_64 with X11 and OpenGL (prebuilt binary; Debian, Arch or Void).
+- Linux x86_64 with an X11 session (Debian, Arch or Void). The prebuilt binary
+  is static (musl) and draws its own window: no OpenGL or toolkit libraries.
 - Optional: Steam, RetroArch, `gio` (or `gtk-launch`) for native games, and
   `sidplayfp` for SID music.
 
@@ -55,7 +56,7 @@ checks it against the release `SHA256SUMS`; nothing is compiled on your machine.
 git clone https://github.com/nirucon/nirugame
 cd nirugame
 ./install.sh                                  # into ~/.local
-NIRUGAME_VERSION=0.1.4 ./install.sh           # a specific release
+NIRUGAME_VERSION=0.2.0 ./install.sh           # a specific release
 NIRUGAME_PREFIX=/usr/local ./install.sh       # another prefix (needs the rights to write there)
 ```
 
@@ -74,11 +75,14 @@ nirugame --version
 |---|---|
 | `Up` / `Down` | Select a game |
 | `Enter` | Launch the selected game |
-| `Tab` | Next tab (when the search field is not focused) |
+| `Tab` / `Shift+Tab` | Next or previous tab |
+| `Page Up` / `Page Down` | Scroll the list |
+| `Ctrl+F` | Search field (typing anywhere also starts a search) |
+| `F5` | Rescan the libraries (in Music: the SID folder) |
 | `Esc` | Close |
 
-Typing in the search field filters the list; the **Launch** button does the same
-as `Enter`.
+Typing filters the list; the **Launch** button does the same as `Enter`, and a
+click on a row selects it.
 
 Games start without a shell: Steam with `steam -applaunch APPID` (or the
 Flatpak), RetroArch with `retroarch -L CORE CONTENT`, native games with
@@ -111,8 +115,9 @@ from the active NIRUX theme in `~/.config/niruwm/`.
   also lists discovery errors.
 - **No music:** install `sidplayfp` from your distribution and check
   `nirugame --music-status`.
-- **The binary does not start after install:** the X11/OpenGL runtime libraries
-  are missing; the installer stops with that message.
+- **The binary does not start after install:** the installer stops with that
+  message. The binary is static; check that it is the x86_64 release and that
+  `DISPLAY` points at an X11 session.
 
 ## Uninstall
 
@@ -134,7 +139,24 @@ cargo fmt --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo build --release --locked
+tests/xvfb.sh target/release/nirugame          # end-to-end GUI test in Xvfb
 ```
+
+### Performance
+
+Since 0.2.0 the window is drawn by a small software canvas on x11rb (the
+NIRUFM toolkit) instead of egui and OpenGL. Measured on othala in the same
+Xvfb, three starts each:
+
+| | 0.1.4 (egui) | 0.2.0 |
+|---|---|---|
+| First frame | window mapped after 62 to 114 ms | 20 to 24 ms |
+| Memory (RSS) | 112 to 119 MB | 8.2 MB |
+| CPU while idle | 0 | 0 |
+| Binary | 6.6 MB, glibc | 1.4 MB, static |
+
+The libraries are read on a thread while the window opens; while idle the
+program sleeps in `poll()`.
 
 ## Status, disclaimer and how it's made
 

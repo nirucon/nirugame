@@ -12,29 +12,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: x86_64-unknown-linux-musl
       - name: Build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev
+        run: sudo apt-get update && sudo apt-get install -y musl-tools xvfb xdotool imagemagick fonts-dejavu-core python3
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
-      - run: cargo build --release --locked
+      # A static binary: runs on Debian, Arch and Void without GUI libraries.
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
       - name: Verify version
-        run: test "$(./target/release/nirugame --version | awk '{print $2}')" = "${GITHUB_REF_NAME#v}"
+        run: test "$(./target/x86_64-unknown-linux-musl/release/nirugame --version | awk '{print $2}')" = "${GITHUB_REF_NAME#v}"
+      - name: End-to-end GUI test
+        run: tests/xvfb.sh target/x86_64-unknown-linux-musl/release/nirugame
       - name: Package prebuilt binary
         run: |
           mkdir -p dist
-          cp target/release/nirugame install.sh uninstall.sh README.md LICENSE dist/
+          cp target/x86_64-unknown-linux-musl/release/nirugame install.sh uninstall.sh README.md LICENSE dist/
           cp -R assets dist/
           printf '%s\n' "${GITHUB_REF_NAME#v}" > dist/VERSION
           (cd dist && sha256sum nirugame install.sh uninstall.sh README.md LICENSE VERSION assets/* > SHA256SUMS)
-          (cd dist && tar -czf "nirugame-${GITHUB_REF_NAME#v}-x86_64-linux-gnu.tar.gz" nirugame VERSION install.sh uninstall.sh README.md LICENSE assets SHA256SUMS)
+          (cd dist && tar -czf "nirugame-${GITHUB_REF_NAME#v}-x86_64-linux-musl.tar.gz" nirugame VERSION install.sh uninstall.sh README.md LICENSE assets SHA256SUMS)
           cd dist && sha256sum nirugame *.tar.gz install.sh uninstall.sh README.md LICENSE VERSION assets/* > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           make_latest: true
           files: |
             dist/nirugame
-            dist/nirugame-*-x86_64-linux-gnu.tar.gz
+            dist/nirugame-*-x86_64-linux-musl.tar.gz
             dist/install.sh
             dist/uninstall.sh
             dist/README.md

@@ -1,5 +1,5 @@
 mod app;
-mod theme;
+mod gui;
 
 use app::NirugameApp;
 use nirugame::{games, music};
@@ -84,25 +84,17 @@ fn main() {
             "music" => app::View::Music,
             _ => app::View::All,
         });
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("NIRUGAME")
-            .with_app_id("nirugame")
-            .with_inner_size(egui::vec2(1020.0, 720.0))
-            .with_min_inner_size(egui::vec2(360.0, 360.0))
-            .with_resizable(true),
-        renderer: eframe::Renderer::Glow,
-        vsync: true,
-        multisampling: 0,
-        depth_buffer: 0,
-        stencil_buffer: 0,
-        ..Default::default()
+    let started = std::time::Instant::now();
+    let mut app = NirugameApp::new(initial, gui::shell::waker());
+    let opts = gui::shell::Opts {
+        title: "NIRUGAME",
+        class: "nirugame",
+        size: (1020, 720),
+        min: (360, 360),
+        icon: 'G',
+        timing_env: "NIRUGAME_TIMING",
     };
-    if let Err(error) = eframe::run_native(
-        "NIRUGAME",
-        options,
-        Box::new(move |cc| Ok(Box::new(NirugameApp::new(cc, initial)))),
-    ) {
+    if let Err(error) = gui::shell::run(&mut app, opts, started) {
         eprintln!("nirugame: display/window initialization failed: {error}");
         std::process::exit(1);
     }

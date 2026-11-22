@@ -10,19 +10,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libx11-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libgl1-mesa-dev xvfb
+      - name: Test dependencies
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool imagemagick fonts-dejavu-core python3
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: cargo build --release --locked
-      - name: GUI smoke test
-        run: |
-          set +e
-          timeout 3s xvfb-run -a ./target/release/nirugame
-          code=$?
-          set -e
-          test "$code" -eq 124
+      - name: End-to-end GUI test
+        run: tests/xvfb.sh target/release/nirugame
       - name: CLI smoke test
         run: |
           ./target/release/nirugame --version
