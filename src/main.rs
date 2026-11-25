@@ -2,40 +2,64 @@ mod app;
 mod gui;
 
 use app::NirugameApp;
-use nirugame::{games, music};
+use nirugame::{config, games, music, systems};
 
-const HELP: &str = "NIRUGAME — retro game launcher for NIRUX
+const HELP: &str = "NIRUGAME: retro game launcher for NIRUX
 
 Usage:
-  nirugame [--open all|steam|retroarch|native|music]
-  nirugame --list
+  nirugame [--open all|favourites|recent|steam|retroarch|native|music|SYSTEM]
+  nirugame --list [--rescan]
+  nirugame --cores
   nirugame --setup-plan steam|retroarch|all
   nirugame --music-status
   nirugame --version
 
-NIRUGAME reads local Steam manifests, RetroArch playlists and native game
-desktop entries. It never bundles ROMs, game files or SID music.";
+SYSTEM is a system id such as nes, snes, c64, gba, n64, psx or megadrive.
 
-fn print_catalog() -> Result<(), Box<dyn std::error::Error>> {
-    let catalog = games::Catalog::discover();
+NIRUGAME reads local Steam manifests, RetroArch playlists, your ROM folders
+and native game desktop entries. It never bundles ROMs, game files or SID
+music.";
+
+fn print_catalog(rescan: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let catalog = games::Catalog::discover_with(&config::load(), rescan, &mut |_| {});
     println!("{}", serde_json::to_string_pretty(&catalog)?);
     Ok(())
 }
 
 fn print_music() -> Result<(), Box<dyn std::error::Error>> {
     let tracks = music::discover();
-    let config = music::load_config();
+    let config = config::load();
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
             "directory": music::music_dir(),
             "selected": config.music,
+            "nirusid": music::nirusid(),
             "tracks": tracks.iter().map(|track| serde_json::json!({
                 "title": track.title,
                 "path": track.path,
             })).collect::<Vec<_>>(),
         }))?
     );
+    Ok(())
+}
+
+fn print_cores() -> Result<(), Box<dyn std::error::Error>> {
+    let list: Vec<serde_json::Value> = games::players(&config::load())
+        .into_iter()
+        .map(|(system, r)| {
+            let info = system.info();
+            match r {
+                Ok(player) => {
+                    serde_json::json!({"system": info.id, "name": info.name, "player": player})
+                }
+                Err(hint) => {
+                    serde_json::json!({"system": info.id, "name": info.name, "missing": hint})
+                }
+            }
+        })
+        .collect();
+    println!("{}", serde_json::to_string_pretty(&list)?);
     Ok(())
 }
 
@@ -50,7 +74,14 @@ fn main() {
         return;
     }
     if args.iter().any(|arg| arg == "--list") {
-        if let Err(error) = print_catalog() {
+        if let Err(error) = print_catalog(args.iter().any(|arg| arg == "--rescan")) {
+            eprintln!("nirugame: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if args.iter().any(|arg| arg == "--cores") {
+        if let Err(error) = print_cores() {
             eprintln!("nirugame: {error}");
             std::process::exit(1);
         }
@@ -82,10 +113,14 @@ fn main() {
             "retroarch" => app::View::RetroArch,
             "native" => app::View::Native,
             "music" => app::View::Music,
-            _ => app::View::All,
+            "favourites" | "favorites" => app::View::Favourites,
+            "recent" => app::View::Recent,
+            other => systems::System::from_id(other)
+                .map(app::View::System)
+                .unwrap_or(app::View::All),
         });
     let started = std::time::Instant::now();
-    let mut app = NirugameApp::new(initial, gui::shell::waker());
+    let mut app = NirugameApp::new(initial, gui::shell::waker(), started);
     let opts = gui::shell::Opts {
         title: "NIRUGAME",
         class: "nirugame",

@@ -506,6 +506,11 @@ enum Cmd {
         color: u32,
         bold: bool,
     },
+    Image {
+        x: i32,
+        y: i32,
+        img: std::sync::Arc<nirugame::thumbs::Image>,
+    },
 }
 
 /// Options of a button.
@@ -707,7 +712,7 @@ impl Ui<'_> {
                     Cmd::Clip(r) | Cmd::Fill(r, _) | Cmd::Tint(r, ..) | Cmd::Box { r, .. } => {
                         r.y += dy
                     }
-                    Cmd::Text { y, .. } => *y += dy,
+                    Cmd::Text { y, .. } | Cmd::Image { y, .. } => *y += dy,
                     Cmd::Nop | Cmd::Unclip(_) => {}
                 }
             }
@@ -899,6 +904,11 @@ impl Ui<'_> {
             bold,
         });
         w
+    }
+
+    /// An ARGB image with its top left corner at (x, y).
+    pub fn paint_image(&mut self, x: i32, y: i32, img: std::sync::Arc<nirugame::thumbs::Image>) {
+        self.out().push(Cmd::Image { x, y, img });
     }
 
     pub fn text_width(&mut self, s: &str, sz: Sz) -> i32 {
@@ -1561,6 +1571,7 @@ impl Ui<'_> {
                     Cmd::Clip(r) | Cmd::Unclip(r) => cv.set_clip(*r),
                     Cmd::Fill(r, c) => cv.fill(*r, *c),
                     Cmd::Tint(r, c, a) => cv.tint(*r, *c, *a),
+                    Cmd::Image { x, y, img } => cv.blit(*x, *y, img.w, img.h, &img.px),
                     Cmd::Box {
                         r,
                         rad,

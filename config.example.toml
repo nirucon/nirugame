@@ -1,0 +1,30 @@
+# NIRUGAME configuration: ~/.config/nirugame/config.toml
+# Every setting is optional. NIRUGAME itself only writes the `music` line
+# and keeps the rest of this file as you wrote it.
+
+# The SID background track (chosen in the Music view); empty means Off.
+music = ""
+
+[roms]
+# Extra ROM folders, scanned besides the defaults.
+dirs = ["~/Emulation/roms", "/mnt/games/roms"]
+# Scan the default folders too: ~/Games/roms, ~/Games/ROMs, ~/ROMs, ~/roms,
+# system folders directly in ~/Games (PS1, snes, ...), RetroArch's file
+# browser folder and the folders of your RetroArch playlists.
+defaults = true
+# How many folder levels below a ROM folder to look.
+depth = 6
+
+[cores]
+# The libretro core per system: a core name (the file name without
+# `_libretro.so`) or a full path. Without an entry NIRUGAME takes the first
+# installed core of its list for the system.
+snes = "snes9x"
+nes = "mesen"
+# psx = "~/.config/retroarch/cores/swanstation_libretro.so"
+
+[emulators]
+# A stand-alone emulator per system instead of RetroArch. VICE programs
+# (x64sc, x64, x128, ...) get -autostart; others get the file as argument.
+# Shift+Enter still starts the game in RetroArch when a core is installed.
+c64 = "x64sc"

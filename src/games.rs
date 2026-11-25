@@ -1,10 +1,15 @@
 //! Local game discovery. Nothing here downloads metadata or starts a daemon.
 //! Steam is read from its appmanifest files, RetroArch from its playlists and
-//! native games from desktop entries. Launch commands are argv arrays, never
-//! shell strings.
+//! the ROM folders, native games from desktop entries. Launch commands are
+//! argv arrays, never shell strings.
 
+use crate::config::{self, Config};
+use crate::retroarch::{self, Cores, Entry, Install};
+use crate::roms::{self, Rom, Source};
+use crate::systems::{self, System};
 use serde::Serialize;
 use std::{
+    collections::{HashMap, HashSet},
     env, fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -18,6 +23,27 @@ pub enum Kind {
     Native,
 }
 
+/// What NIRUGAME knows about a ROM.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct RomInfo {
+    pub system: Option<System>,
+    pub file: String,
+    pub size: u64,
+    /// The core or emulator that starts it ("snes9x", "x64sc").
+    pub player: String,
+    /// Why it cannot start (no core, no RetroArch, file gone); empty if it can.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub hint: String,
+    /// The RetroArch playlist (thumbnail folder) and label.
+    pub playlist: String,
+    pub label: String,
+    /// The other way to start it: RetroArch when an emulator is configured.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub alt_launch: Vec<String>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub alt_label: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Game {
     pub key: String,
@@ -25,6 +51,14 @@ pub struct Game {
     pub name: String,
     pub detail: String,
     pub launch: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rom: Option<Box<RomInfo>>,
+}
+
+impl Game {
+    pub fn system(&self) -> Option<System> {
+        self.rom.as_ref().and_then(|r| r.system)
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -33,6 +67,12 @@ pub struct Catalog {
     pub retroarch: Vec<Game>,
     pub native: Vec<Game>,
     pub errors: Vec<String>,
+    /// The ROM folders that were scanned.
+    pub rom_folders: Vec<PathBuf>,
+    /// RetroArch thumbnail folders, for box art.
+    pub thumbnail_dirs: Vec<PathBuf>,
+    /// "cache" or "scan".
+    pub index: &'static str,
 }
 
 impl Catalog {
@@ -47,17 +87,62 @@ impl Catalog {
     pub fn count(&self) -> usize {
         self.steam.len() + self.retroarch.len() + self.native.len()
     }
+
     pub fn discover() -> Self {
+        Self::discover_with(&config::load(), false, &mut |_| {})
+    }
+
+    /// Everything, with the ROM index from the cache unless `force`. When
+    /// the cache is outdated, `stale` first receives a catalog built from it.
+    pub fn discover_with(cfg: &Config, force: bool, stale: &mut dyn FnMut(Catalog)) -> Self {
+        let t0 = std::time::Instant::now();
+        let timing = env::var_os("NIRUGAME_TIMING").is_some();
+        let others = thread::spawn(move || {
+            let s = discover_steam();
+            let t1 = t0.elapsed();
+            let n = discover_native();
+            if timing {
+                eprintln!(
+                    "nirugame: steam {:.1} ms, native {:.1} ms",
+                    t1.as_secs_f64() * 1000.0,
+                    (t0.elapsed() - t1).as_secs_f64() * 1000.0
+                );
+            }
+            (s, n)
+        });
         let mut catalog = Self::default();
-        match discover_steam() {
+        let retro = discover_retroarch(cfg, force, &mut |games, ctx| {
+            stale(Catalog {
+                retroarch: games,
+                thumbnail_dirs: ctx.thumbnail_dirs.clone(),
+                index: "cache",
+                ..Default::default()
+            })
+        });
+        if timing {
+            eprintln!(
+                "nirugame: retroarch and ROM folders {:.1} ms ({} entries, {:?})",
+                t0.elapsed().as_secs_f64() * 1000.0,
+                retro.games.len(),
+                retro.source
+            );
+        }
+        catalog.retroarch = retro.games;
+        catalog.errors = retro.errors;
+        catalog.rom_folders = retro.roots;
+        catalog.thumbnail_dirs = retro.thumbnail_dirs;
+        catalog.index = match retro.source {
+            Source::Cache => "cache",
+            Source::Scan => "scan",
+        };
+        let (steam, native) = others
+            .join()
+            .unwrap_or_else(|_| (Err("discovery failed".into()), Ok(Vec::new())));
+        match steam {
             Ok(games) => catalog.steam = games,
             Err(error) => catalog.errors.push(format!("Steam: {error}")),
         }
-        match discover_retroarch() {
-            Ok(games) => catalog.retroarch = games,
-            Err(error) => catalog.errors.push(format!("RetroArch: {error}")),
-        }
-        match discover_native() {
+        match native {
             Ok(games) => catalog.native = games,
             Err(error) => catalog.errors.push(format!("Native: {error}")),
         }
@@ -66,19 +151,23 @@ impl Catalog {
 }
 
 pub fn launch(game: &Game) -> Result<(), String> {
-    let Some(program) = game.launch.first() else {
-        return Err(format!("{} has no launch command", game.name));
+    launch_argv(&game.launch, &game.name)
+}
+
+pub fn launch_argv(argv: &[String], name: &str) -> Result<(), String> {
+    let Some(program) = argv.first() else {
+        return Err(format!("{name} has no launch command"));
     };
     let mut command = Command::new(program);
     command
-        .args(&game.launch[1..])
+        .args(&argv[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     crate::process::detach_terminal(&mut command);
     let mut child = command
         .spawn()
-        .map_err(|error| format!("cannot start {}: {error}", game.name))?;
+        .map_err(|error| format!("cannot start {name}: {error}"))?;
     // The launcher may stay open. Reap the child without blocking the UI.
     thread::spawn(move || {
         let _ = child.wait();
@@ -216,6 +305,7 @@ fn steam_manifest(path: &Path) -> Option<Game> {
         name,
         detail: format!("Steam · app {appid} · {installdir}"),
         launch,
+        rom: None,
     })
 }
 
@@ -247,116 +337,312 @@ fn discover_steam() -> Result<Vec<Game>, String> {
     Ok(games)
 }
 
-fn retroarch_prefix() -> Option<Vec<String>> {
-    if let Some(path) = command_in_path("retroarch") {
-        return Some(vec![path]);
-    }
-    command_exists("flatpak").then(|| {
-        vec![
-            "flatpak".into(),
-            "run".into(),
-            "org.libretro.RetroArch".into(),
-        ]
-    })
+/// The configured stand-alone emulators that are installed.
+fn emulators(cfg: &Config) -> HashMap<System, (String, PathBuf)> {
+    systems::ALL
+        .iter()
+        .filter_map(|s| Some((*s, retroarch::emulator_for(*s, cfg)?)))
+        .collect()
 }
 
-fn retroarch_playlists() -> Vec<PathBuf> {
-    let base = env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home().join(".config"));
-    let mut paths = Vec::new();
-    for dir in [
-        base.join("retroarch/playlists"),
-        home().join(".var/app/org.libretro.RetroArch/config/retroarch/playlists"),
-    ] {
-        if let Ok(entries) = fs::read_dir(dir) {
-            paths.extend(
-                entries
-                    .flatten()
-                    .map(|entry| entry.path())
-                    .filter(|path| path.extension().is_some_and(|ext| ext == "lpl")),
-            );
+/// Everything a ROM entry needs to be started.
+pub struct RetroContext {
+    cfg: Config,
+    prefix: Option<Vec<String>>,
+    cores: Cores,
+    resolved: HashMap<System, Result<(String, PathBuf), String>>,
+    emulators: HashMap<System, (String, PathBuf)>,
+    pub thumbnail_dirs: Vec<PathBuf>,
+}
+
+impl RetroContext {
+    pub fn new(cfg: &Config, installs: &[Install]) -> Self {
+        let cores = Cores::scan(&retroarch::core_dirs(installs));
+        let resolved = systems::ALL
+            .iter()
+            .map(|s| (*s, retroarch::core_for(*s, &cores, cfg)))
+            .collect();
+        let mut thumbnail_dirs: Vec<PathBuf> =
+            installs.iter().map(Install::thumbnail_dir).collect();
+        thumbnail_dirs.dedup();
+        Self {
+            emulators: emulators(cfg),
+            cfg: cfg.clone(),
+            prefix: retroarch::prefix(),
+            cores,
+            resolved,
+            thumbnail_dirs,
         }
     }
-    paths.sort();
-    paths
-}
 
-fn retroarch_playlist(path: &Path) -> Result<Vec<Game>, String> {
-    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let value: serde_json::Value =
-        serde_json::from_str(&text).map_err(|error| error.to_string())?;
-    let Some(items) = value.as_array() else {
-        return Ok(Vec::new());
-    };
-    let playlist = path
-        .file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or("RetroArch")
-        .to_string();
-    let prefix = retroarch_prefix();
-    let mut games = Vec::new();
-    for item in items {
-        let Some(content) = item.get("path").and_then(|value| value.as_str()) else {
-            continue;
+    pub fn core(&self, system: System) -> Result<(String, PathBuf), String> {
+        self.resolved
+            .get(&system)
+            .cloned()
+            .unwrap_or_else(|| Err("unknown system".into()))
+    }
+
+    pub fn cores(&self) -> &Cores {
+        &self.cores
+    }
+
+    pub fn retroarch(&self) -> Option<&[String]> {
+        self.prefix.as_deref()
+    }
+
+    /// The game for one ROM. `content` is what RetroArch gets (it may name
+    /// a member of an archive), `file` the file on disk.
+    #[allow(clippy::too_many_arguments)]
+    fn game(
+        &self,
+        content: &str,
+        file: &str,
+        name: &str,
+        system: Option<System>,
+        size: u64,
+        playlist: &str,
+        entry_core: Option<(String, PathBuf)>,
+        exists: bool,
+    ) -> Game {
+        let configured = system.filter(|s| self.cfg.cores.contains_key(s.id()));
+        let core: Result<(String, PathBuf), String> = match (configured, entry_core) {
+            (Some(s), entry) => match self.core(s) {
+                Ok(c) => Ok(c),
+                Err(e) => entry.ok_or(e),
+            },
+            (None, Some(c)) => Ok(c),
+            (None, None) => match system {
+                Some(s) => self.core(s),
+                None => Err("unknown system: set a core for it in its RetroArch playlist".into()),
+            },
         };
-        if content.trim().is_empty() {
-            continue;
-        }
-        let label = item
-            .get("label")
-            .and_then(|value| value.as_str())
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                Path::new(content)
-                    .file_stem()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| "Unknown game".into());
-        let core = item
-            .get("core_path")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        let mut launch = prefix.clone().unwrap_or_default();
-        if !core.is_empty() && core != "DETECT" {
-            launch.push("-L".into());
-            launch.push(core.into());
-        }
-        launch.push(content.into());
-        let core_name = item
-            .get("core_name")
-            .and_then(|value| value.as_str())
-            .unwrap_or("");
-        games.push(Game {
-            key: format!("retro:{}:{}", playlist, content),
-            kind: Kind::RetroArch,
-            name: label,
-            detail: format!(
-                "RetroArch · {} · {}",
-                playlist,
-                if core_name.is_empty() {
-                    "detected core"
-                } else {
-                    core_name
+        let ra_launch = |core: &(String, PathBuf)| -> Option<Vec<String>> {
+            let mut argv = self.prefix.clone()?;
+            argv.push("-L".into());
+            argv.push(core.1.to_string_lossy().to_string());
+            argv.push(content.to_string());
+            Some(argv)
+        };
+        let emulator = system.and_then(|s| self.emulators.get(&s).cloned());
+        let mut info = RomInfo {
+            system,
+            file: file.to_string(),
+            size,
+            playlist: playlist.to_string(),
+            label: name.to_string(),
+            ..Default::default()
+        };
+        let mut launch = Vec::new();
+        if let Some((emu, path)) = emulator {
+            launch = retroarch::emulator_argv(&path, file);
+            info.player = emu;
+            if let Some(argv) = core.as_ref().ok().and_then(ra_launch) {
+                info.alt_launch = argv;
+                info.alt_label = format!(
+                    "RetroArch ({})",
+                    core.as_ref().map(|c| c.0.as_str()).unwrap_or("")
+                );
+            }
+        } else {
+            match &core {
+                Ok(c) => {
+                    info.player = c.0.clone();
+                    match ra_launch(c) {
+                        Some(argv) => launch = argv,
+                        None => {
+                            info.hint = "RetroArch is not installed: install the retroarch package or the Flatpak org.libretro.RetroArch".into()
+                        }
+                    }
                 }
-            ),
+                Err(hint) => info.hint = hint.clone(),
+            }
+        }
+        if !exists {
+            info.hint = "ROM file not found".into();
+            launch.clear();
+            info.alt_launch.clear();
+        }
+        let badge = system.map(|s| s.info().badge).unwrap_or("RetroArch");
+        let detail = if !info.hint.is_empty() {
+            format!(
+                "{badge} · {}",
+                if exists { "no core" } else { "file not found" }
+            )
+        } else {
+            format!("{badge} · {}", info.player)
+        };
+        Game {
+            key: format!("rom:{content}"),
+            kind: Kind::RetroArch,
+            name: name.to_string(),
+            detail,
             launch,
-        });
+            rom: Some(Box::new(info)),
+        }
     }
-    Ok(games)
 }
 
-fn discover_retroarch() -> Result<Vec<Game>, String> {
-    let mut games = Vec::new();
-    for path in retroarch_playlists() {
-        if let Ok(mut discovered) = retroarch_playlist(&path) {
-            games.append(&mut discovered);
+/// Playlist entries and scanned ROMs as games, each file once. A playlist
+/// entry keeps its label, playlist and core; the scan adds the rest.
+pub fn retro_games(entries: &[Entry], scanned: &[Rom], ctx: &RetroContext) -> Vec<Game> {
+    let by_path: HashMap<&str, usize> = scanned
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.path.as_str(), i))
+        .collect();
+    let mut used = vec![false; scanned.len()];
+    let mut keys = HashSet::new();
+    // Thousands of entries share a few playlist and database names.
+    let mut named: HashMap<String, Option<System>> = HashMap::new();
+    let mut by_name = |n: &str| {
+        if let Some(s) = named.get(n) {
+            return *s;
+        }
+        let s = systems::system_for_db(n);
+        named.insert(n.to_string(), s);
+        s
+    };
+    let mut games = Vec::with_capacity(entries.len() + scanned.len());
+    for e in entries {
+        let file = retroarch::content_file(&e.path);
+        let hit = by_path.get(file).copied().or_else(|| {
+            let c = fs::canonicalize(file).ok()?;
+            by_path.get(c.to_str()?).copied()
+        });
+        let rom = hit.map(|i| {
+            used[i] = true;
+            &scanned[i]
+        });
+        let system = by_name(&e.db_name)
+            .or_else(|| by_name(&e.playlist))
+            .or_else(|| rom.map(|r| r.system))
+            .or_else(|| {
+                let p = Path::new(file);
+                let parent = p
+                    .parent()
+                    .and_then(|d| d.file_name())
+                    .map(|n| n.to_string_lossy().to_string());
+                systems::detect(p, &[parent.as_deref().unwrap_or("")])
+            });
+        let (size, exists) = match rom {
+            Some(r) => (r.size, true),
+            None => match fs::metadata(file) {
+                Ok(m) => (m.len(), true),
+                Err(_) => (0, false),
+            },
+        };
+        let entry_core = (!e.core_path.is_empty() && e.core_path != "DETECT")
+            .then(|| PathBuf::from(&e.core_path))
+            .filter(|p| p.is_file())
+            .map(|p| {
+                let name = p
+                    .file_name()
+                    .map(|n| {
+                        n.to_string_lossy()
+                            .trim_end_matches("_libretro.so")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                (name, p)
+            });
+        let game = ctx.game(
+            &e.path,
+            file,
+            &e.label,
+            system,
+            size,
+            &e.playlist,
+            entry_core,
+            exists,
+        );
+        if keys.insert(game.key.clone()) {
+            games.push(game);
         }
     }
-    games.sort_by_key(|game| game.name.to_lowercase());
-    Ok(games)
+    for (i, r) in scanned.iter().enumerate() {
+        if used[i] {
+            continue;
+        }
+        let game = ctx.game(
+            &r.path,
+            &r.path,
+            &r.name,
+            Some(r.system),
+            r.size,
+            r.system.info().db,
+            None,
+            true,
+        );
+        if keys.insert(game.key.clone()) {
+            games.push(game);
+        }
+    }
+    games.sort_by_cached_key(|g| g.name.to_lowercase());
+    games
+}
+
+struct Retro {
+    games: Vec<Game>,
+    errors: Vec<String>,
+    roots: Vec<PathBuf>,
+    thumbnail_dirs: Vec<PathBuf>,
+    source: Source,
+}
+
+fn discover_retroarch(
+    cfg: &Config,
+    force: bool,
+    stale: &mut dyn FnMut(Vec<Game>, &RetroContext),
+) -> Retro {
+    let installs = retroarch::installs();
+    let mut errors = Vec::new();
+    let mut entries = Vec::new();
+    for path in retroarch::playlists(&installs) {
+        let name = path
+            .file_stem()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        match fs::read_to_string(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|t| retroarch::parse_playlist(&t, &name))
+        {
+            Ok(mut e) => entries.append(&mut e),
+            Err(e) => errors.push(format!("RetroArch: playlist {name}: {e}")),
+        }
+    }
+    let files: Vec<String> = entries
+        .iter()
+        .map(|e| retroarch::content_file(&e.path).to_string())
+        .collect();
+    let rom_dirs: Vec<PathBuf> = installs.iter().filter_map(Install::rom_dir).collect();
+    let roots = roms::roots(cfg, &rom_dirs, &files);
+    let ctx = RetroContext::new(cfg, &installs);
+    let (index, source) = roms::index(&roots, cfg.roms.depth, force, &mut |old| {
+        stale(retro_games(&entries, &old.roms, &ctx), &ctx)
+    });
+    Retro {
+        games: retro_games(&entries, &index.roms, &ctx),
+        errors,
+        roots,
+        thumbnail_dirs: ctx.thumbnail_dirs.clone(),
+        source,
+    }
+}
+
+/// Per system: the core or emulator that starts it, or what to install.
+pub fn players(cfg: &Config) -> Vec<(System, Result<String, String>)> {
+    let installs = retroarch::installs();
+    let ctx = RetroContext::new(cfg, &installs);
+    systems::ALL
+        .iter()
+        .map(|s| {
+            let r = match retroarch::emulator_for(*s, cfg) {
+                Some((name, path)) => Ok(format!("{name} ({})", path.display())),
+                None => ctx.core(*s).map(|(n, p)| format!("{n} ({})", p.display())),
+            };
+            (*s, r)
+        })
+        .collect()
 }
 
 fn desktop_dirs() -> Vec<PathBuf> {
@@ -423,6 +709,7 @@ fn desktop_game(path: &Path) -> Option<Game> {
             format!("Native · {comment}")
         },
         launch,
+        rom: None,
     })
 }
 
@@ -508,19 +795,6 @@ mod tests {
     }
 
     #[test]
-    fn retroarch_playlist_parser_reads_label_and_core() {
-        let dir = std::env::temp_dir().join(format!("nirugame-test-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let path = dir.join("Arcade.lpl");
-        fs::write(&path, r#"[{"path":"/games/a.zip","label":"Alpha","core_path":"/cores/mame_libretro.so","core_name":"MAME"}]"#).unwrap();
-        let games = retroarch_playlist(&path).unwrap();
-        assert_eq!(games.len(), 1);
-        assert_eq!(games[0].name, "Alpha");
-        assert!(games[0].detail.contains("MAME"));
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
     fn steam_manifest_reads_nested_vdf_values() {
         let dir = std::env::temp_dir().join(format!("nirugame-acf-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
@@ -534,6 +808,168 @@ mod tests {
         assert_eq!(game.name, "Counter-Strike 2");
         assert_eq!(game.key, "steam:730");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    fn ctx(cores: &[(&str, &str)], cfg: Config, retroarch: bool) -> RetroContext {
+        let cores = Cores {
+            by_name: cores
+                .iter()
+                .map(|(n, p)| (n.to_string(), PathBuf::from(p)))
+                .collect(),
+        };
+        let resolved = systems::ALL
+            .iter()
+            .map(|s| (*s, retroarch::core_for(*s, &cores, &cfg)))
+            .collect();
+        RetroContext {
+            emulators: emulators(&cfg),
+            cfg,
+            prefix: retroarch.then(|| vec!["retroarch".to_string()]),
+            cores,
+            resolved,
+            thumbnail_dirs: Vec::new(),
+        }
+    }
+
+    fn rom(path: &str, system: System) -> Rom {
+        Rom {
+            path: path.into(),
+            system,
+            name: Path::new(path)
+                .file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .to_string(),
+            size: 1024,
+        }
+    }
+
+    #[test]
+    fn playlists_and_scan_merge_without_duplicates() {
+        let dir = std::env::temp_dir().join(format!("nirugame-merge-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let zelda = dir.join("Zelda.sfc");
+        fs::write(&zelda, b"").unwrap();
+        let zelda = zelda.to_string_lossy().to_string();
+        let entries = vec![
+            Entry {
+                path: zelda.clone(),
+                label: "The Legend of Zelda (USA)".into(),
+                core_path: "DETECT".into(),
+                core_name: "DETECT".into(),
+                playlist: "Nintendo - Super Nintendo Entertainment System".into(),
+                db_name: String::new(),
+            },
+            Entry {
+                path: "/gone/Old.nes".into(),
+                label: "Old".into(),
+                core_path: String::new(),
+                core_name: String::new(),
+                playlist: "NES".into(),
+                db_name: String::new(),
+            },
+        ];
+        let scanned = vec![
+            rom(&zelda, System::Snes),
+            rom("/r/nes/Mario.nes", System::Nes),
+            rom("/r/n64/Kart.z64", System::N64),
+        ];
+        let c = ctx(
+            &[
+                ("snes9x", "/c/snes9x_libretro.so"),
+                ("mesen", "/c/mesen_libretro.so"),
+            ],
+            Config::default(),
+            true,
+        );
+        let games = retro_games(&entries, &scanned, &c);
+        assert_eq!(games.len(), 4, "{games:#?}");
+        let by = |name: &str| games.iter().find(|g| g.name == name).unwrap();
+        // The playlist label wins and the file is listed once.
+        let z = by("The Legend of Zelda (USA)");
+        assert_eq!(
+            z.launch,
+            vec!["retroarch", "-L", "/c/snes9x_libretro.so", zelda.as_str()]
+        );
+        assert_eq!(
+            z.rom.as_ref().unwrap().playlist,
+            "Nintendo - Super Nintendo Entertainment System"
+        );
+        assert!(games.iter().all(|g| g.name != "Zelda"));
+        let m = by("Mario");
+        assert_eq!(m.launch[2], "/c/mesen_libretro.so");
+        assert_eq!(m.rom.as_ref().unwrap().playlist, System::Nes.info().db);
+        // No core: listed, cannot start, says what to install.
+        let k = by("Kart");
+        assert!(k.launch.is_empty());
+        assert!(k.rom.as_ref().unwrap().hint.contains("Mupen64Plus"));
+        assert_eq!(k.detail, "N64 · no core");
+        // A playlist entry whose file is gone.
+        let o = by("Old");
+        assert!(o.launch.is_empty());
+        assert_eq!(o.rom.as_ref().unwrap().hint, "ROM file not found");
+        // No RetroArch at all: a hint as well.
+        let none = ctx(
+            &[("mesen", "/c/mesen_libretro.so")],
+            Config::default(),
+            false,
+        );
+        let g = retro_games(&[], &scanned[1..2], &none);
+        assert!(
+            g[0].launch.is_empty()
+                && g[0]
+                    .rom
+                    .as_ref()
+                    .unwrap()
+                    .hint
+                    .contains("RetroArch is not installed")
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn configured_core_and_emulator_win() {
+        let mut cfg = Config::default();
+        cfg.cores.insert("snes".into(), "bsnes".into());
+        cfg.emulators.insert("c64".into(), "/bin/sh".into());
+        let c = ctx(
+            &[
+                ("snes9x", "/c/snes9x_libretro.so"),
+                ("bsnes", "/c/bsnes_libretro.so"),
+                ("vice_x64sc", "/c/vice_x64sc_libretro.so"),
+            ],
+            cfg,
+            true,
+        );
+        let entries = vec![Entry {
+            path: "/r/snes/A.sfc".into(),
+            label: "A".into(),
+            core_path: String::new(),
+            core_name: String::new(),
+            playlist: "SNES".into(),
+            db_name: String::new(),
+        }];
+        let scanned = vec![
+            rom("/r/snes/A.sfc", System::Snes),
+            rom("/r/c64/Elite.d64", System::C64),
+        ];
+        let games = retro_games(&entries, &scanned, &c);
+        let a = games.iter().find(|g| g.name == "A").unwrap();
+        assert_eq!(a.launch[2], "/c/bsnes_libretro.so");
+        let e = games.iter().find(|g| g.name == "Elite").unwrap();
+        assert_eq!(e.launch, vec!["/bin/sh", "/r/c64/Elite.d64"]);
+        let rom = e.rom.as_ref().unwrap();
+        assert_eq!(rom.player, "sh");
+        assert_eq!(
+            rom.alt_launch,
+            vec![
+                "retroarch",
+                "-L",
+                "/c/vice_x64sc_libretro.so",
+                "/r/c64/Elite.d64"
+            ]
+        );
+        assert_eq!(rom.alt_label, "RetroArch (vice_x64sc)");
     }
 
     #[test]

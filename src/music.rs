@@ -2,9 +2,10 @@
 //!
 //! NIRUGAME never bundles SID tunes. It scans one user-owned directory and
 //! starts the optional `sidplayfp` player for the selected file. The child is
-//! killed and reaped on stop, selection change and application exit.
+//! killed and reaped on stop, selection change and application exit. The
+//! full SID player of the suite is NIRUSID: when `nirusid` is installed, a
+//! track can be handed to it.
 
-use serde::{Deserialize, Serialize};
 #[cfg(target_os = "linux")]
 use std::{
     env, fs,
@@ -18,13 +19,6 @@ pub struct Track {
     pub title: String,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Config {
-    /// Empty means Off.
-    pub music: String,
-}
-
 pub fn music_dir() -> PathBuf {
     if let Some(path) = env::var_os("NIRUGAME_MUSIC_DIR") {
         return PathBuf::from(path);
@@ -35,31 +29,6 @@ pub fn music_dir() -> PathBuf {
             PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".local/share")
         })
         .join("nirugame/music")
-}
-
-pub fn config_path() -> PathBuf {
-    env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(env::var_os("HOME").unwrap_or_default()).join(".config"))
-        .join("nirugame/config.toml")
-}
-
-pub fn load_config() -> Config {
-    fs::read_to_string(config_path())
-        .ok()
-        .and_then(|text| toml::from_str(&text).ok())
-        .unwrap_or_default()
-}
-
-pub fn save_config(config: &Config) -> Result<(), String> {
-    let path = config_path();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let text = toml::to_string_pretty(config).map_err(|error| error.to_string())?;
-    let temp = path.with_extension("toml.tmp");
-    fs::write(&temp, text).map_err(|error| error.to_string())?;
-    fs::rename(temp, path).map_err(|error| error.to_string())
 }
 
 fn sid_title(path: &Path) -> Option<String> {
@@ -105,6 +74,30 @@ pub fn discover() -> Vec<Track> {
     tracks.sort_by_key(|track| track.title.to_lowercase());
     tracks.truncate(256);
     tracks
+}
+
+/// `nirusid` on PATH: the suite's full SID player.
+pub fn nirusid() -> Option<PathBuf> {
+    crate::retroarch::command_in_path("nirusid")
+}
+
+/// Open `track` in NIRUSID. It is a program of its own: it keeps running
+/// when NIRUGAME closes.
+pub fn open_in_nirusid(program: &Path, track: &Path) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command
+        .arg(track)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::process::detach_terminal(&mut command);
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("cannot start NIRUSID: {error}"))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 pub struct Player {

@@ -182,6 +182,22 @@ impl Canvas {
         }
     }
 
+    /// Copy ARGB pixels (0xAARRGGBB) to (x, y), blending by their alpha.
+    pub fn blit(&mut self, x: i32, y: i32, w: i32, h: i32, src: &[u32]) {
+        let area = Rect::new(x, y, w, h).intersect(&self.clip);
+        if area.w <= 0 || area.h <= 0 || src.len() < (w * h) as usize {
+            return;
+        }
+        for py in area.y..area.y + area.h {
+            let src_row = ((py - y) * w) as usize;
+            let dst_row = (py * self.w) as usize;
+            for px in area.x..area.x + area.w {
+                let p = src[src_row + (px - x) as usize];
+                self.blend_at(dst_row + px as usize, p & 0xff_ffff, p >> 24);
+            }
+        }
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         // SAFETY: u32 has no padding; the slice covers exactly the pixels.
         unsafe { std::slice::from_raw_parts(self.px.as_ptr() as *const u8, self.px.len() * 4) }
@@ -211,6 +227,16 @@ mod tests {
         assert_eq!(c.px[0], 0);
         assert_eq!(c.px[10 * 20 + 10], 0xffffff);
         assert_eq!(c.px[10], 0xffffff);
+    }
+
+    #[test]
+    fn blit_is_clipped_and_uses_alpha() {
+        let mut c = Canvas::new(4, 1);
+        c.blit(-1, 0, 3, 1, &[0xff112233, 0xff445566, 0x00ffffff]);
+        assert_eq!(c.px[0], 0x445566);
+        assert_eq!(c.px[1], 0);
+        c.blit(3, 0, 2, 1, &[0xffabcdef, 0xff000000]);
+        assert_eq!(c.px[3], 0xabcdef);
     }
 
     #[test]
